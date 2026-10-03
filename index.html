@@ -65,6 +65,8 @@
   dialog input { width: 100%; }
   .row { display: flex; gap: 8px; margin-top: 16px; }
   .row button { flex: 1; padding: 12px; }
+  .plan { margin-top: 14px; font-size: 14px; }
+  .plan button { margin-top: 8px; padding: 8px 12px; background: var(--accent-soft); color: var(--accent); font-size: 14px; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -95,6 +97,7 @@
   </div>
 
   <section id="results" class="hidden">
+    <div class="card plan hidden" id="planInfo"></div>
     <h2>送料込みで確定（実質価格の安い順）</h2>
     <div class="card" id="fixedList"></div>
 
@@ -229,19 +232,23 @@ $("textForm").onsubmit = (e) => {
 
 // ---- 検索して並べる ----
 let cheapHidden = [];
-async function runSearch(q) {
+async function runSearch(q, raw = false) {
   const isJan = /^(\d{8}|\d{13})$/.test(q.replace(/\D/g, "")) && /^[\d\s-]+$/.test(q);
   renderLinks(q);
-  setStatus("楽天・Yahoo!を検索しています…");
+  setStatus(isJan || raw ? "楽天・Yahoo!を検索しています…" : "検索語を整えてから、楽天・Yahoo!を検索しています…");
   try {
     const params = new URLSearchParams(isJan ? { jan: q.replace(/\D/g, "") } : { q });
+    if (raw) params.set("raw", "1");
     const data = await callApi("/search?" + params);
+    const plan = data.plan;
+    if (plan) renderLinks(plan.keyword);
+    renderPlan(q, plan, data.notice, raw);
     let items = data.items.filter((it) => it.price > 0);
     items.forEach((it) => { it.total = it.price - it.point; });
 
     // 型番や文字で探したときは、付属品など極端に安いものを一旦隠す
     cheapHidden = [];
-    if (!isJan && items.length >= 5) {
+    if (!isJan && !(plan && plan.minPrice > 0) && items.length >= 5) {
       const sorted = items.map((it) => it.price).sort((a, b) => a - b);
       const median = sorted[Math.floor(sorted.length / 2)];
       cheapHidden = items.filter((it) => it.price < median * 0.35);
@@ -260,6 +267,24 @@ async function runSearch(q) {
   } catch (err) {
     setStatus(err.message, true);
   }
+}
+
+// AIがどう検索語を整えたかを見せ、外したいときは絞り込みなしで検索し直せるようにする
+function renderPlan(q, plan, notice, raw) {
+  const box = $("planInfo");
+  let html = "";
+  if (plan) {
+    html = `検索語：<b>${esc(plan.keyword)}</b>` +
+      (plan.minPrice > 0 ? `　／　<b>${yen(plan.minPrice)}以上</b>に絞り込み（関連商品を除くため）` : "");
+  }
+  if (notice) html += (html ? "<br>" : "") + esc(notice);
+  if (raw) html = "絞り込みなしで検索しました。関連商品が混じることがあります。";
+  if (!html) { box.classList.add("hidden"); return; }
+  if (plan && !raw) html += `<br><button type="button" id="rawSearch">本体が見当たらないときは：絞り込みなしで検索</button>`;
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  const b = $("rawSearch");
+  if (b) b.onclick = () => runSearch(q, true);
 }
 
 function itemHtml(it, rank) {
